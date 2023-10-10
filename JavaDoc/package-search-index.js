@@ -1,0 +1,1 @@
+packageSearchIndex = [{"l":"All Packages","u":"allpackages-index.html"},{"l":"org.app.logic"},{"l":"org.app.service"},{"l":"org.domain"},{"l":"org.example"},{"l":"org.infrastructure.console"},{"l":"org.infrastructure.console.state"},{"l":"org.infrastructure.console.state.client"},{"l":"org.infrastructure.in_memory"},{"l":"org.repository_interface"}];updateSearchResults();
