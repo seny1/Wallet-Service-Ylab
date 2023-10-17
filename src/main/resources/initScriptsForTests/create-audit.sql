@@ -1,0 +1,1 @@
+CREATE TABLE public.client_audit (id SERIAL PRIMARY KEY, client_login VARCHAR(255), action VARCHAR(255));

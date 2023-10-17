@@ -1,110 +1,128 @@
 package org.infrastructure.in_memory;
 
-import org.apache.commons.collections4.MultiValuedMap;
-import org.apache.commons.collections4.multimap.ArrayListValuedHashMap;
-import org.domain.Client;
-import org.domain.Transaction;
-import org.domain.TypeOfTransaction;
-import org.junit.jupiter.api.Assertions;
+import org.elSasen.domain.Client;
+import org.elSasen.domain.Transaction;
+import org.elSasen.domain.TypeOfTransaction;
+import org.elSasen.infrastructure.in_memory.TransactionInMemory;
+import org.elSasen.util.ConnectionManager;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
+import org.junit.jupiter.api.*;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.ext.ScriptUtils;
+import org.testcontainers.jdbc.JdbcDatabaseDelegate;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.lifecycle.Startables;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
-import java.lang.reflect.Field;
-import java.util.HashMap;
-import java.util.Map;
+import java.sql.*;
 
+@Testcontainers
 class TransactionInMemoryTest {
 
-    private TransactionInMemory transactionInMemory;
+    @Container
+    private static final PostgreSQLContainer<?> container = new PostgreSQLContainer<>("postgres:15.2")
+            .withDatabaseName("Wallet-Service")
+            .withUsername("ArsenyRevunov52")
+            .withPassword("ArsenyRevunov52");
+
+    private final TransactionInMemory transactionInMemory = new TransactionInMemory();
+
+    private Connection connection;
+
+    @BeforeAll
+    static void runContainer() {
+        Startables.deepStart(container);
+        JdbcDatabaseDelegate jdbcDatabaseDelegate = new JdbcDatabaseDelegate(container, "");
+        ScriptUtils.runInitScript(jdbcDatabaseDelegate, "initScriptsForTests/create-entities-and-transaction.sql");
+        ScriptUtils.runInitScript(jdbcDatabaseDelegate, "initScriptsForTests/create-client.sql");
+        ScriptUtils.runInitScript(jdbcDatabaseDelegate, "initScriptsForTests/insert-data-into-client.sql");
+        ScriptUtils.runInitScript(jdbcDatabaseDelegate, "initScriptsForTests/create-history.sql");
+        ScriptUtils.runInitScript(jdbcDatabaseDelegate, "initScriptsForTests/insert-data-into-history.sql");
+    }
 
     @BeforeEach
-    void setUp() throws IllegalAccessException, NoSuchFieldException {
-        transactionInMemory = new TransactionInMemory();
-        Map<Integer, Transaction> tempMap = new HashMap<>();
-        tempMap.put(1, new Transaction(1, TypeOfTransaction.Debit, 1000));
-        Field transactionMap = transactionInMemory.getClass().getDeclaredField("transactionMap");
-        transactionMap.setAccessible(true);
-        transactionMap.set(transactionInMemory, tempMap);
+    public void beforeEach() throws SQLException {
+        connection = DriverManager.getConnection(container.getJdbcUrl(), container.getUsername(), container.getPassword());
+    }
+
+
+    @Test
+    void validateAmountTestTrue() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            Client client = new Client("Ivan", "12345", 500);
+            boolean test = transactionInMemory.validateAmount(TypeOfTransaction.Debit, 400, client);
+            Assertions.assertTrue(test);
+        }
     }
 
     @Test
-    void validateIdTrue() {
-        boolean test = transactionInMemory.validateId(2);
-        Assertions.assertTrue(test);
+    void validateAmountTestFalse() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            Client client = new Client("Ivan", "12345", 5000);
+            boolean test = transactionInMemory.validateAmount(TypeOfTransaction.Debit, 600, client);
+            Assertions.assertFalse(test);
+        }
     }
 
     @Test
-    void validateIdFalse() {
-        boolean test = transactionInMemory.validateId(1);
-        Assertions.assertFalse(test);
+    void addTransactionTest() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            Long id = transactionInMemory.addTransaction(TypeOfTransaction.Debit, 500);
+            String sql = """
+                    SELECT id, type, amount
+                    FROM entities."transaction"
+                    WHERE id = ?
+                    """;
+            Connection new_connection = DriverManager.getConnection(container.getJdbcUrl(), container.getUsername(), container.getPassword());
+            PreparedStatement preparedStatement = new_connection.prepareStatement(sql);
+            preparedStatement.setLong(1, id);
+            ResultSet resultSet = preparedStatement.executeQuery();
+            resultSet.next();
+            Transaction expected = new Transaction(id, TypeOfTransaction.Debit, 500);
+            Transaction actual = new Transaction(id, TypeOfTransaction.valueOf(resultSet.getString("type")), resultSet.getInt("amount"));
+            Assertions.assertEquals(expected, actual);
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Test
-    void validateAmountTrue() {
-        Client client = new Client("Ivan123", "123", 50);
-        boolean test = transactionInMemory.validateAmount(TypeOfTransaction.Debit, 25, client);
-        Assertions.assertTrue(test);
+    void addTransactionHistoryTest() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            int id = transactionInMemory.addTransactionHistory(new Client("Ivan", "123", 500), TypeOfTransaction.Debit, 10);
+            String sql = """
+                    SELECT client_login, type_of_transaction, amount
+                    FROM public.transactions_history
+                    WHERE id = ?
+                    """;
+            Connection new_connection = DriverManager.getConnection(container.getJdbcUrl(), container.getUsername(), container.getPassword());
+            PreparedStatement preparedStatement = new_connection.prepareStatement(sql);
+            preparedStatement.setInt(1, id);
+            ResultSet resultSet = preparedStatement.executeQuery();
+            resultSet.next();
+            Assertions.assertEquals("Ivan", resultSet.getString("client_login"));
+            Assertions.assertEquals(TypeOfTransaction.Debit.name(), resultSet.getString("type_of_transaction"));
+            Assertions.assertEquals(10, resultSet.getInt("amount"));
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Test
-    void validateAmountFalse() {
-        Client client = new Client("Ivan123", "123", 50);
-        boolean test = transactionInMemory.validateAmount(TypeOfTransaction.Debit, 100, client);
-        Assertions.assertFalse(test);
-    }
-
-    @Test
-    void addTransaction() throws NoSuchFieldException, IllegalAccessException {
-        TransactionInMemory transactionInMemory1 = new TransactionInMemory();
-        Map<Integer, Transaction> expected = new HashMap<>();
-        Transaction transaction = new Transaction(5, TypeOfTransaction.Debit, 500);
-        expected.put(transaction.getId(), transaction);
-
-        transactionInMemory1.addTransaction(transaction);
-
-        Field clientMap = transactionInMemory1.getClass().getDeclaredField("transactionMap");
-        clientMap.setAccessible(true);
-
-        Object actual = clientMap.get(transactionInMemory1);
-
-        Assertions.assertEquals(expected, actual);
-    }
-
-    @Test
-    void addTransactionHistory() throws NoSuchFieldException, IllegalAccessException {
-        MultiValuedMap<String, Transaction> expected = new ArrayListValuedHashMap<>();
-        Transaction transaction = new Transaction(10, TypeOfTransaction.Debit, 500);
-        expected.put("Ivan123", transaction);
-
-        transactionInMemory.addTransactionHistory(new Client("Ivan123", "123", 1000), transaction);
-
-        Field audit = transactionInMemory.getClass().getDeclaredField("history");
-        audit.setAccessible(true);
-
-        Object actual = audit.get(transactionInMemory);
-
-        Assertions.assertEquals(expected, actual);
-    }
-
-    @Test
-    void printHistory() throws NoSuchFieldException, IllegalAccessException {
-        Field audit = transactionInMemory.getClass().getDeclaredField("history");
-        audit.setAccessible(true);
-
-        MultiValuedMap<String, Transaction> tempMap = new ArrayListValuedHashMap<>();
-        Transaction transaction = new Transaction(10, TypeOfTransaction.Debit, 500);
-        tempMap.put("Ivan123", transaction);
-
-        audit.set(transactionInMemory, tempMap);
-
-        PrintStream standardOut = System.out;
-        ByteArrayOutputStream outputStreamCaptor = new ByteArrayOutputStream();
-        System.setOut(new PrintStream(outputStreamCaptor));
-
-        transactionInMemory.printHistory(new Client("Ivan123", "123", 500));
-
-        Assertions.assertEquals("10 Debit 500", outputStreamCaptor.toString().trim());
+    void printHistoryTest() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            ByteArrayOutputStream outputStreamCaptor = new ByteArrayOutputStream();
+            System.setOut(new PrintStream(outputStreamCaptor));
+            transactionInMemory.printHistory(new Client("Ivan", "123", 500));
+            Assertions.assertEquals("1 Credit 700", outputStreamCaptor.toString().trim());
+        }
     }
 }

@@ -1,117 +1,166 @@
 package org.infrastructure.in_memory;
 
-import org.apache.commons.collections4.MultiValuedMap;
-import org.apache.commons.collections4.multimap.ArrayListValuedHashMap;
-import org.domain.Client;
+import org.elSasen.domain.Client;
+import org.elSasen.domain.TypeOfTransaction;
+import org.elSasen.infrastructure.in_memory.ClientInMemory;
+import org.elSasen.util.ConnectionManager;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.ext.ScriptUtils;
+import org.testcontainers.jdbc.JdbcDatabaseDelegate;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.lifecycle.Startables;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
-import java.lang.reflect.Field;
-import java.util.HashMap;
-import java.util.Map;
+import java.sql.*;
 
+@Testcontainers
 class ClientInMemoryTest {
 
-    private ClientInMemory clientInMemory;
+    @Container
+    private static final PostgreSQLContainer<?> container = new PostgreSQLContainer<>("postgres:15.2")
+            .withDatabaseName("Wallet-Service")
+            .withUsername("ArsenyRevunov52")
+            .withPassword("ArsenyRevunov52");
+
+    private final ClientInMemory clientInMemory = new ClientInMemory();
+    private Connection connection;
+
+    @BeforeAll
+    static void runContainer() {
+        Startables.deepStart(container);
+        JdbcDatabaseDelegate jdbcDatabaseDelegate = new JdbcDatabaseDelegate(container, "");
+        ScriptUtils.runInitScript(jdbcDatabaseDelegate, "initScriptsForTests/create-entities-and-transaction.sql");
+        ScriptUtils.runInitScript(jdbcDatabaseDelegate, "initScriptsForTests/create-client.sql");
+        ScriptUtils.runInitScript(jdbcDatabaseDelegate, "initScriptsForTests/insert-data-into-client.sql");
+        ScriptUtils.runInitScript(jdbcDatabaseDelegate, "initScriptsForTests/create-audit.sql");
+        ScriptUtils.runInitScript(jdbcDatabaseDelegate, "initScriptsForTests/insert-data-into-audit.sql");
+    }
 
     @BeforeEach
-    void setUp() throws IllegalAccessException, NoSuchFieldException {
-        clientInMemory = new ClientInMemory();
-        Map<String, Client> tempMap = new HashMap<>();
-        tempMap.put("Ivan123", new Client("Ivan123", "123", 0));
-        Field clientMap = clientInMemory.getClass().getDeclaredField("clientMap");
-        clientMap.setAccessible(true);
-        clientMap.set(clientInMemory, tempMap);
+    public void beforeEach() throws SQLException {
+        connection = DriverManager.getConnection(container.getJdbcUrl(), container.getUsername(), container.getPassword());
     }
 
     @Test
-    void checkClientTrue() {
-        boolean test = clientInMemory.checkClient(new Client("Ivan123", "123", 0));
-        Assertions.assertTrue(test);
+    void checkClientTest() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            Client client = new Client("Ivan", "12345", 500);
+            boolean test = clientInMemory.checkClient(client);
+            Assertions.assertTrue(test);
+        }
     }
 
     @Test
-    void checkClientFalse() {
-        boolean test = clientInMemory.checkClient(new Client("Ivan123", "1233", 0));
-        Assertions.assertFalse(test);
+    void addClientTest() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            Client expected = new Client("Petr", "1234", 1000);
+            Long id = clientInMemory.addClient(expected);
+            String sql = """
+                    SELECT login, password, balance
+                    FROM entities."client"
+                    WHERE id = ?
+                    """;
+            Connection new_connection = DriverManager.getConnection(container.getJdbcUrl(), container.getUsername(), container.getPassword());
+            PreparedStatement preparedStatement = new_connection.prepareStatement(sql);
+            preparedStatement.setLong(1, id);
+            ResultSet resultSet = preparedStatement.executeQuery();
+            resultSet.next();
+            Client actual = new Client(resultSet.getString("login"), resultSet.getString("password"), resultSet.getInt("balance"));
+            Assertions.assertEquals(expected, actual);
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Test
-    void addClient() throws NoSuchFieldException, IllegalAccessException {
-        ClientInMemory clientInMemory1 = new ClientInMemory();
-
-        Map<String, Client> expected = new HashMap<>();
-        Client client = new Client("Ivan124", "123", 0);
-        expected.put(client.getLogin(), client);
-
-        clientInMemory1.addClient(client);
-
-        Field clientMap = clientInMemory1.getClass().getDeclaredField("clientMap");
-        clientMap.setAccessible(true);
-
-        Object actual = clientMap.get(clientInMemory1);
-
-        Assertions.assertEquals(expected, actual);
+    void findClientByLoginTestTrue() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            boolean test = clientInMemory.findClientByLogin("Ivan");
+            Assertions.assertTrue(test);
+        }
     }
 
     @Test
-    void findClientByLoginTrue() {
-        boolean test = clientInMemory.findClientByLogin("Ivan123");
-        Assertions.assertTrue(test);
+    void findClientByLoginTestFalse() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            boolean test = clientInMemory.findClientByLogin("Yuri");
+            Assertions.assertFalse(test);
+        }
     }
 
     @Test
-    void findClientByLoginFalse() {
-        boolean test = clientInMemory.findClientByLogin("Serega154");
-        Assertions.assertFalse(test);
+    void findClientByLoginReturnClientTest() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            Client actual = clientInMemory.findClientByLoginReturnClient("Serega");
+            Assertions.assertEquals("Serega", actual.getLogin());
+            Assertions.assertEquals("12345", actual.getPassword());
+            Assertions.assertEquals(500, actual.getBalance());
+        }
     }
 
     @Test
-    void findClientByLoginReturnClientEquals() {
-        Client actual = clientInMemory.findClientByLoginReturnClient("Ivan123");
-        Assertions.assertEquals(new Client("Ivan123", "123", 0), actual);
+    void minusBalanceTest() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            int actual = clientInMemory.minusBalance("Ivan", 300);
+            int expected = 200;
+            Assertions.assertEquals(expected, actual);
+        }
     }
 
     @Test
-    void findClientByLoginReturnClientNotEquals() {
-        Client actual = clientInMemory.findClientByLoginReturnClient("Serega543");
-        Assertions.assertNotEquals(new Client("Ivan123", "123", 0), actual);
+    void plusBalanceTest() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            int actual = clientInMemory.plusBalance("Serega", 300);
+            int expected = 800;
+            Assertions.assertEquals(expected, actual);
+        }
     }
 
     @Test
-    void addInAudit() throws NoSuchFieldException, IllegalAccessException {
-        MultiValuedMap<String, String> expected = new ArrayListValuedHashMap<>();
-        expected.put("Ivan123", "registration");
-
-        clientInMemory.addInAudit("Ivan123", "registration");
-
-        Field audit = clientInMemory.getClass().getDeclaredField("audit");
-        audit.setAccessible(true);
-
-        Object actual = audit.get(clientInMemory);
-
-        Assertions.assertEquals(expected, actual);
+    void addInAuditTest() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            int id = clientInMemory.addInAudit("Serega", "registration");
+            String sql = """
+                    SELECT client_login, action
+                    FROM public.client_audit
+                    WHERE id = ?
+                    """;
+            Connection new_connection = DriverManager.getConnection(container.getJdbcUrl(), container.getUsername(), container.getPassword());
+            PreparedStatement preparedStatement = new_connection.prepareStatement(sql);
+            preparedStatement.setInt(1, id);
+            ResultSet resultSet = preparedStatement.executeQuery();
+            resultSet.next();
+            Assertions.assertEquals("Serega", resultSet.getString("client_login"));
+            Assertions.assertEquals("registration", resultSet.getString("action"));
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Test
-    void printAudit() throws NoSuchFieldException, IllegalAccessException {
-        Field audit = clientInMemory.getClass().getDeclaredField("audit");
-        audit.setAccessible(true);
-
-        MultiValuedMap<String, String> tempMap = new ArrayListValuedHashMap<>();
-        tempMap.put("Ivan123", "registration");
-
-        audit.set(clientInMemory, tempMap);
-
-        PrintStream standardOut = System.out;
-        ByteArrayOutputStream outputStreamCaptor = new ByteArrayOutputStream();
-        System.setOut(new PrintStream(outputStreamCaptor));
-
-        clientInMemory.printAudit("Ivan123");
-
-        Assertions.assertEquals("registration", outputStreamCaptor.toString().trim());
+    void printAudit() {
+        try (MockedStatic<ConnectionManager> theMock = Mockito.mockStatic(ConnectionManager.class)) {
+            theMock.when(ConnectionManager::open).thenReturn(connection);
+            ByteArrayOutputStream outputStreamCaptor = new ByteArrayOutputStream();
+            System.setOut(new PrintStream(outputStreamCaptor));
+            clientInMemory.printAudit("Ivan");
+            Assertions.assertEquals("registration", outputStreamCaptor.toString().trim());
+        }
     }
 }
