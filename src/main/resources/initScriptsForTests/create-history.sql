@@ -1,0 +1,1 @@
+CREATE TABLE public.transactions_history (id SERIAL PRIMARY KEY, client_login VARCHAR(255), type_of_transaction VARCHAR(255), amount INT);

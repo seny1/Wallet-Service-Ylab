@@ -1,21 +1,15 @@
 package org.app;
 
-import org.app.logic.ClientService;
-import org.domain.Client;
-import org.infrastructure.in_memory.ClientInMemory;
+import org.elSasen.app.logic.ClientService;
+import org.elSasen.domain.Client;
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.repository_interface.ClientRepository;
-
-import static org.mockito.BDDMockito.given;
-import static org.mockito.Mockito.mock;
+import org.elSasen.repository_interface.ClientRepository;
 
 @ExtendWith(MockitoExtension.class)
 public class ClientServiceTest {
